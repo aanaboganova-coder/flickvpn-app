@@ -1,0 +1,14 @@
+{
+  "appName": "FLICK-VPN",
+  "appNameRu": "FLICK-VPN",
+  "androidAppId": "com.flickvpn.app",
+  "iosBundleId": "com.flickvpn.app",
+  "accentColor": "#3B82F6",
+  "backgroundColor": "#0B1220",
+  "versionName": "1.0.0",
+  "upstreamAndroidTag": "2.3.15",
+  "upstreamIosTag": "dev",
+  "upstreamIosCoreTag": "v1.14.4",
+  "subscriptionUrl": "",
+  "website": ""
+}

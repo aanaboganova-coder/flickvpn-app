@@ -1,0 +1,11 @@
+# Локальные артефакты сборки
+upstream/
+core/
+sing-box-for-apple/
+Payload/
+*.ipa
+*.apk
+__pycache__/
+*.pyc
+release.jks
+local.properties

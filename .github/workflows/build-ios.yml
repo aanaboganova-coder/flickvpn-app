@@ -1,0 +1,99 @@
+name: Build branded iOS app (experimental)
+
+# ЭКСПЕРИМЕНТАЛЬНАЯ сборка неподписанного .ipa из SFI (sing-box-for-apple).
+#
+# Важно:
+#  * Сборка идёт на macOS-раннере GitHub (бесплатно для публичных репозиториев).
+#  * Получится НЕПОДПИСАННЫЙ .ipa. Чтобы установить его на iPhone, нужен
+#    Apple ID и подпись через Sideloadly/AltStore.
+#  * Для VPN (Network Extension) Apple требует платный аккаунт разработчика
+#    ($99/год). С бесплатным Apple ID entitlement NE, как правило, не выдаётся.
+#  * upstream SFI активно меняется, поэтому сборка может потребовать правок.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout branding kit
+        uses: actions/checkout@v4
+
+      - name: Read brand.json
+        run: |
+          echo "APP_NAME=$(jq -r '.appName' brand.json)" >> "$GITHUB_ENV"
+          echo "IOS_BUNDLE_ID=$(jq -r '.iosBundleId' brand.json)" >> "$GITHUB_ENV"
+          echo "CORE_TAG=$(jq -r '.upstreamIosCoreTag // "v1.14.4"' brand.json)" >> "$GITHUB_ENV"
+          echo "SFI_REF=$(jq -r '.upstreamIosTag // "dev"' brand.json)" >> "$GITHUB_ENV"
+
+      - name: Install Pillow
+        run: python3 -m pip install --user pillow
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+
+      - name: Clone sing-box core
+        run: git clone --depth 1 --branch "$CORE_TAG" https://github.com/SagerNet/sing-box.git core
+
+      - name: Clone SFI (sing-box-for-apple)
+        run: |
+          git clone --recursive --depth 1 --branch "$SFI_REF" \
+            https://github.com/SagerNet/sing-box-for-apple.git sing-box-for-apple
+
+      - name: Install gomobile
+        run: |
+          make -C core lib_install
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Build Libbox.xcframework (iOS only)
+        working-directory: core
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go run ./cmd/internal/build_libbox -target apple -platform ios
+          ls -la ../sing-box-for-apple/Libbox.xcframework
+
+      - name: Apply branding
+        run: python3 apply_brand.py --platform ios --path sing-box-for-apple --brand brand.json
+
+      - name: Build unsigned app
+        working-directory: sing-box-for-apple
+        run: |
+          xcodebuild build \
+            -project sing-box.xcodeproj \
+            -scheme SFI \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            BASE_PACKAGE_IDENTIFIER="$IOS_BUNDLE_ID" \
+            PRODUCT_NAME="$APP_NAME" \
+            CONFIGURATION_BUILD_DIR="$PWD/build/ios"
+
+      - name: Package unsigned IPA
+        working-directory: sing-box-for-apple
+        run: |
+          APP="$(find build/ios -maxdepth 1 -name '*.app' | head -n1)"
+          echo "App: $APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry "$APP_NAME-unsigned.ipa" Payload
+          ls -lh "$APP_NAME-unsigned.ipa"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-ipa
+          path: sing-box-for-apple/*.ipa
+          if-no-files-found: error

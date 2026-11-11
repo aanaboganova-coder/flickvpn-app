@@ -1,0 +1,100 @@
+name: Build branded Android APK
+
+# Собирает APK из upstream v2rayNG, применяя брендинг из brand.json.
+# Запуск: Actions -> "Build branded Android APK" -> Run workflow.
+# Готовый APK появится в разделе Artifacts.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout branding kit
+        uses: actions/checkout@v4
+
+      - name: Read brand.json
+        run: |
+          echo "UPSTREAM_TAG=$(jq -r '.upstreamAndroidTag // "2.3.15"' brand.json)" >> "$GITHUB_ENV"
+          echo "APP_NAME=$(jq -r '.appName' brand.json)" >> "$GITHUB_ENV"
+          echo "APP_ID=$(jq -r '.androidAppId' brand.json)" >> "$GITHUB_ENV"
+
+      - name: Clone upstream v2rayNG
+        run: |
+          git clone --recursive --branch "$UPSTREAM_TAG" \
+            https://github.com/2dust/v2rayNG.git upstream
+          git -C upstream/AndroidLibXrayLite fetch --tags --force || true
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          log-accepted-android-sdk-licenses: false
+          cmdline-tools-version: '14742923'
+          packages: 'platforms;android-37.0 build-tools;37.0.0 platform-tools'
+
+      - name: Install NDK
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            --channel=0 --install "ndk;30.0.16248370"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
+
+      - name: Build hev-socks5-tunnel
+        working-directory: upstream
+        run: bash compile-hevtun.sh
+
+      - name: Copy tun2socks libraries
+        run: |
+          mkdir -p upstream/V2rayNG/app/libs
+          cp -r upstream/libs/. upstream/V2rayNG/app/libs/
+
+      - name: Download libv2ray.aar
+        run: |
+          TAG="$(git -C upstream/AndroidLibXrayLite describe --tags --abbrev=0)"
+          echo "AndroidLibXrayLite tag: $TAG"
+          curl -fL --retry 3 \
+            -o upstream/V2rayNG/app/libs/libv2ray.aar \
+            "https://github.com/2dust/AndroidLibXrayLite/releases/download/${TAG}/libv2ray.aar"
+          ls -lh upstream/V2rayNG/app/libs/libv2ray.aar
+
+      - name: Apply branding
+        run: python3 apply_brand.py --platform android --path upstream --brand brand.json
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Build APK
+        working-directory: upstream/V2rayNG
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          chmod +x gradlew
+          keytool -genkeypair -v -keystore release.jks -alias vpn \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass vpnbuildpass -keypass vpnbuildpass \
+            -dname "CN=$APP_NAME, OU=Mobile, O=$APP_NAME, L=City, S=State, C=US"
+          ./gradlew --no-daemon assemblePlaystoreRelease \
+            -Pandroid.injected.signing.store.file="$(pwd)/release.jks" \
+            -Pandroid.injected.signing.store.password=vpnbuildpass \
+            -Pandroid.injected.signing.key.alias=vpn \
+            -Pandroid.injected.signing.key.password=vpnbuildpass
+
+      - name: Show APK info
+        run: |
+          find upstream/V2rayNG/app/build/outputs/apk/playstore/release -name '*.apk' -exec ls -lh {} \;
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: upstream/V2rayNG/app/build/outputs/apk/playstore/release/*.apk
+          if-no-files-found: error
