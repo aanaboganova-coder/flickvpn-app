@@ -64,6 +64,9 @@ jobs:
             "https://github.com/2dust/AndroidLibXrayLite/releases/download/${TAG}/libv2ray.aar"
           ls -lh upstream/V2rayNG/app/libs/libv2ray.aar
 
+      - name: Install Pillow
+        run: python3 -m pip install --quiet --disable-pip-version-check pillow
+
       - name: Apply branding
         run: python3 apply_brand.py --platform android --path upstream --brand brand.json
 
